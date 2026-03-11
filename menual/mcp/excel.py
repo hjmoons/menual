@@ -165,11 +165,107 @@ def _make_timetable_sheet(ws, steps_data: list):
         cur_row += span
 
 
-def _make_workbook(task_name: str, steps_data: list) -> Workbook:
+# ── 사전작업 / 본작업 / 원복작업 공통 시트 ───────────────────────────────────
+
+TASK_COLS = [
+    ("A", 8,  "작업연번"),
+    ("B", 20, "작업내용"),
+    ("C", 14, "대상"),
+    ("D", 16, "대상장비"),
+    ("E", 30, "세부 작업내용"),
+    ("F", 16, "작업자/보고자"),
+    ("G", 10, "완료여부"),
+    ("H", 35, "command"),
+    ("I", 20, "비고"),
+]
+
+
+def _make_sub_sheet(ws, title: str, groups: list):
+    """
+    groups: [
+        {
+            "content": "작업내용",
+            "target": "대상",
+            "device": "대상장비",
+            "details": [
+                {"detail": "세부 작업내용", "owner": "작업자/보고자", "done": "", "command": "명령어", "note": "비고"}
+            ]
+        }, ...
+    ]
+    """
+    ws.title = title
+
+    for col_letter, width, _ in TASK_COLS:
+        ws.column_dimensions[col_letter].width = width
+
+    # 제목
+    ws.merge_cells(f"A1:{TASK_COLS[-1][0]}1")
+    _set_cell(ws, 1, 1, title, bg=COLOR_BLUE, font=_title_font(10))
+    ws.row_dimensions[1].height = 22
+
+    # 헤더
+    for col_idx, (_, _, label) in enumerate(TASK_COLS, start=1):
+        _set_cell(ws, 2, col_idx, label, bg=COLOR_GRAY, font=_header_font())
+    ws.row_dimensions[2].height = 18
+
+    ws.freeze_panes = "A3"
+
+    if not groups:
+        for i in range(20):
+            r = 3 + i
+            ws.row_dimensions[r].height = 25
+            for col_idx in range(1, len(TASK_COLS) + 1):
+                _set_cell(ws, r, col_idx, align=_center() if col_idx in (1, 6, 7) else _left())
+            ws.cell(r, 1).value = i + 1
+        return
+
+    cur_row = 3
+    for i, group in enumerate(groups):
+        details = group.get("details", [{}])
+        span = len(details)
+
+        for d_idx in range(span):
+            r = cur_row + d_idx
+            ws.row_dimensions[r].height = 25
+            for col_idx in range(1, len(TASK_COLS) + 1):
+                _set_cell(ws, r, col_idx, align=_center() if col_idx in (1, 6, 7) else _left())
+
+        # 연번 / 작업내용 / 대상 / 대상장비 → 세로 병합
+        _merge_set(ws, cur_row, 1, cur_row + span - 1, 1, i + 1, align=_center())
+        _merge_set(ws, cur_row, 2, cur_row + span - 1, 2, group.get("content", ""), align=_left())
+        _merge_set(ws, cur_row, 3, cur_row + span - 1, 3, group.get("target", ""), align=_center())
+        _merge_set(ws, cur_row, 4, cur_row + span - 1, 4, group.get("device", ""), align=_center())
+
+        for d_idx, detail in enumerate(details):
+            r = cur_row + d_idx
+            _set_cell(ws, r, 5, detail.get("detail", ""),   align=_left())
+            _set_cell(ws, r, 6, detail.get("owner", ""),    align=_center())
+            _set_cell(ws, r, 7, detail.get("done", ""),     align=_center())
+            _set_cell(ws, r, 8, detail.get("command", ""),  align=_left())
+            _set_cell(ws, r, 9, detail.get("note", ""),     align=_left())
+
+        cur_row += span
+
+
+# ── Workbook ──────────────────────────────────────────────────────────────────
+
+def _make_workbook(task_name: str, steps_data: list,
+                   pre_rows=None, main_rows=None, rollback_rows=None) -> Workbook:
     wb = Workbook()
     wb.remove(wb.active)
-    ws = wb.create_sheet("작업계획서")
-    _make_timetable_sheet(ws, steps_data)
+
+    ws1 = wb.create_sheet("작업계획서")
+    _make_timetable_sheet(ws1, steps_data)
+
+    ws2 = wb.create_sheet("사전작업")
+    _make_sub_sheet(ws2, "사전작업", pre_rows or [])
+
+    ws3 = wb.create_sheet("본작업")
+    _make_sub_sheet(ws3, "본작업", main_rows or [])
+
+    ws4 = wb.create_sheet("원복작업")
+    _make_sub_sheet(ws4, "원복작업", rollback_rows or [])
+
     return wb
 
 
@@ -179,19 +275,33 @@ def register(mcp):
     def create_work_plan_excel(
         task_name: str,
         steps: str = "[]",
+        pre_tasks: str = "[]",
+        main_tasks: str = "[]",
+        rollback_tasks: str = "[]",
         save_dir: str = ""
     ) -> str:
-        """엑셀 작업계획서 생성 (6개 고정 step 구조)
+        """엑셀 작업계획서 생성 (작업계획서/사전작업/본작업/원복작업 4개 시트)
 
         Args:
             task_name: 작업 이름
-            steps: 6개 step 데이터 JSON 배열 (순서: 사전작업/작업개시선언/본작업/서비스오픈선언/원복작업/점검및보고)
+            steps: 작업계획서 시트용. 6개 step 데이터 JSON 배열 (순서: 사전작업/작업개시선언/본작업/서비스오픈선언/원복작업/점검및보고)
                 각 항목: {"start_time": "09:00", "duration": "30분", "tasks": [{"content": "...", "reporter": "...", "worker": "...", "scenario": "..."}]}
                 작업개시선언(2번), 서비스오픈선언(4번)은 start_time만 사용하고 duration/tasks는 무시됨
+                scenario 필드는 명령어가 아닌 보고 메시지나 진행 상황을 자연어로 기술할 것.
+                예) "작업 시작을 팀장님께 메신저로 보고", "@팀장 nginx 재시작 완료, 서비스 정상 확인"
+            pre_tasks: 사전작업 시트 데이터 JSON 배열
+                각 항목: {"content": "작업내용", "target": "대상", "device": "대상장비",
+                          "details": [{"detail": "세부작업내용", "owner": "작업자/보고자", "done": "", "command": "명령어", "note": "비고"}]}
+                작업내용/대상/대상장비는 details 수만큼 셀이 세로 병합됨
+            main_tasks: 본작업 시트 데이터 JSON 배열 (pre_tasks와 동일 구조)
+            rollback_tasks: 원복작업 시트 데이터 JSON 배열 (pre_tasks와 동일 구조)
             save_dir: 저장 폴더 경로 (비우면 바탕화면)
         """
         try:
-            steps_data = json.loads(steps)
+            steps_data    = json.loads(steps)
+            pre_rows      = json.loads(pre_tasks)
+            main_rows     = json.loads(main_tasks)
+            rollback_rows = json.loads(rollback_tasks)
         except json.JSONDecodeError as e:
             return f"JSON 파싱 오류: {e}"
 
@@ -202,5 +312,5 @@ def register(mcp):
         safe_name = task_name.replace(" ", "_").replace("/", "-")
         out_path  = out_dir / f"작업계획서_{safe_name}_{date_str}.xlsx"
 
-        _make_workbook(task_name, steps_data).save(out_path)
+        _make_workbook(task_name, steps_data, pre_rows, main_rows, rollback_rows).save(out_path)
         return f"저장 완료: {out_path}"
