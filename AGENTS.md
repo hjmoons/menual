@@ -6,6 +6,11 @@
 
 This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
+## 개발 워크플로우
+
+- **주요 기능 개발**: Claude Code에서 진행
+- **품질 점검 및 코드 개선**: Codex에서 수행
+
 ## 프로젝트 개요
 
 서버 운영 명령어를 정리하고 조회하는 윈도우 위젯 애플리케이션.
@@ -15,7 +20,7 @@ Python + CustomTkinter 기반. MCP 서버로 Codex에서 직접 명령어 관리
 
 ```bash
 # 의존성 설치
-pip install -r requirements.txt
+pip install -e .
 
 # UI 실행
 python -m menual
@@ -44,10 +49,12 @@ menual/
 │   │   ├── app.py           # App (메인 윈도우)
 │   │   └── dialogs.py       # CommandDialog (추가/수정 모달)
 │   └── mcp/
-│       ├── __init__.py      # MCP 진입점 (python -m menual.mcp)
-│       └── server.py        # MCP 서버 (tools: list/search/add/update/delete)
-├── data/
-│   └── commands.json
+│       ├── __init__.py      # MCP main() 함수
+│       ├── __main__.py      # python -m menual.mcp 진입점
+│       ├── server.py        # FastMCP 인스턴스 + tools 등록
+│       ├── commands.py      # 명령어 CRUD tools
+│       ├── planner.py       # 작업계획서 tools
+│       └── excel.py         # 엑셀 작업계획서 생성 tool
 ├── pyproject.toml
 └── requirements.txt
 ```
@@ -58,7 +65,16 @@ menual/
 - `App` (menual/ui/app.py): 메인 윈도우
 - `CommandDialog` (menual/ui/dialogs.py): 명령어 추가/수정 모달
 
-MCP tools: `list_commands` / `search_commands` / `add_command` / `update_command` / `delete_command`
+### 명령어 관리 tools (commands.py)
+
+`list_commands` / `search_commands` / `add_command` / `update_command` / `delete_command`
+
+### 엑셀 작업계획서 tool (excel.py)
+
+`create_work_plan_excel` - 4개 시트 엑셀 파일 생성
+
+- **작업계획서**: 6개 고정 step (사전작업/작업개시선언/본작업/서비스오픈선언/원복작업/점검및보고), step별 세부task 세로병합
+- **사전작업/본작업/원복작업**: 작업내용 그룹 단위로 연번/작업내용/대상/대상장비 세로병합
 
 ## Codex에 MCP 등록
 
@@ -66,7 +82,11 @@ MCP tools: `list_commands` / `search_commands` / `add_command` / `update_command
 Codex mcp add --transport stdio menual -- python -m menual.mcp
 ```
 
-## 데이터 구조 (data/commands.json)
+## 데이터 저장 경로
+
+명령어 데이터: `%APPDATA%\menual\commands.json` (UI/MCP 공유)
+
+## 데이터 구조 (commands.json)
 
 ```json
 {

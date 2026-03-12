@@ -1,5 +1,6 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
 import json
+import re
 from pathlib import Path
 from datetime import datetime
 
@@ -26,6 +27,8 @@ FIXED_STEPS = [
 
 TOTAL_COLS = 7  # A~G
 
+_INVALID_FILENAME_RE = re.compile(r"[<>:\\/?*\"|]+");
+
 
 def _border():
     s = Side(style="thin")
@@ -50,6 +53,12 @@ def _data_font(bold=False):
     return Font(name="맑은 고딕", size=8, color=COLOR_BLACK, bold=bold)
 
 
+def _sanitize_filename(value: str) -> str:
+    safe = _INVALID_FILENAME_RE.sub("_", value.strip())
+    safe = safe.strip(". ")
+    return safe or "작업계획서"
+
+
 def _set_cell(ws, row, col, value="", bg=COLOR_WHITE, font=None, align=None):
     c = ws.cell(row=row, column=col, value=value)
     c.fill = _fill(bg)
@@ -67,6 +76,44 @@ def _merge_set(ws, r1, c1, r2, c2, value="", bg=COLOR_WHITE, font=None, align=No
     for r in range(r1, r2 + 1):
         for c in range(c1, c2 + 1):
             ws.cell(r, c).border = _border()
+
+
+def _normalize_steps(steps):
+    if not isinstance(steps, list):
+        return []
+
+    normalized = []
+    for item in steps:
+        if not isinstance(item, dict):
+            normalized.append({})
+            continue
+        tasks = item.get("tasks", [])
+        normalized.append({
+            "start_time": item.get("start_time", ""),
+            "duration": item.get("duration", ""),
+            "tasks": tasks if isinstance(tasks, list) else []
+        })
+    return normalized
+
+
+def _normalize_groups(groups):
+    if not isinstance(groups, list):
+        return []
+
+    normalized = []
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        details = group.get("details", [])
+        if not isinstance(details, list):
+            details = []
+        normalized.append({
+            "content": group.get("content", ""),
+            "target": group.get("target", ""),
+            "device": group.get("device", ""),
+            "details": [d for d in details if isinstance(d, dict)]
+        })
+    return normalized
 
 
 def _make_timetable_sheet(ws, steps_data: list):
@@ -305,12 +352,24 @@ def register(mcp):
         except json.JSONDecodeError as e:
             return f"JSON 파싱 오류: {e}"
 
+        steps_data = _normalize_steps(steps_data)
+        pre_rows = _normalize_groups(pre_rows)
+        main_rows = _normalize_groups(main_rows)
+        rollback_rows = _normalize_groups(rollback_rows)
+
         out_dir = Path(save_dir) if save_dir else Path.home() / "Desktop"
-        out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            return f"저장 폴더 생성 실패: {e}"
 
         date_str  = datetime.now().strftime("%Y%m%d")
-        safe_name = task_name.replace(" ", "_").replace("/", "-")
+        safe_name = _sanitize_filename(task_name)
         out_path  = out_dir / f"작업계획서_{safe_name}_{date_str}.xlsx"
 
-        _make_workbook(task_name, steps_data, pre_rows, main_rows, rollback_rows).save(out_path)
+        try:
+            _make_workbook(task_name, steps_data, pre_rows, main_rows, rollback_rows).save(out_path)
+        except OSError as e:
+            return f"파일 저장 실패: {e}"
+
         return f"저장 완료: {out_path}"
