@@ -1,6 +1,32 @@
 ﻿# -*- coding: utf-8 -*-
 from menual.manager import CommandManager
 
+
+def _parse_bulk_text(text: str) -> list[dict]:
+    """
+    # 주석이 name, 다음 줄이 command인 블록을 파싱.
+    예:
+        # 디스크 확인
+        df -h
+
+        # 메모리 확인
+        free -m
+    """
+    results = []
+    current_name = None
+
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            current_name = line.lstrip("#").strip()
+        elif current_name:
+            results.append({"name": current_name, "command": line})
+            current_name = None
+
+    return results
+
 manager = CommandManager()
 
 
@@ -45,6 +71,29 @@ def register(mcp):
             example: 새 사용 예시
         """
         return manager.update_command(cmd_id, name, command, description, example)
+
+    @mcp.tool()
+    def bulk_add_commands(text: str) -> str:
+        """여러 명령어를 한 번에 추가. # 주석이 이름, 바로 아래 줄이 명령어.
+
+        입력 형식:
+            # 명령어 이름
+            명령어
+
+            # 다른 명령어 이름
+            다른 명령어
+
+        Args:
+            text: 위 형식의 멀티라인 텍스트
+        """
+        items = _parse_bulk_text(text)
+        if not items:
+            return "파싱된 명령어가 없습니다. '# 이름\\n명령어' 형식으로 입력하세요."
+
+        for item in items:
+            manager.add_command(item["name"], item["command"])
+
+        return f"{len(items)}개 명령어 저장 완료: {', '.join(i['name'] for i in items)}"
 
     @mcp.tool()
     def delete_command(cmd_id: int) -> str:
